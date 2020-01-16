@@ -1,0 +1,409 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  NameTagValue:
+    Type: String
+    Default: CNP demo
+
+  VpcCidr:
+    Type: String
+    Description: CNP demo CIDR
+    Default: 10.0.0.0/16
+
+  IpsSubnetGatewayAddress:
+    Type: String
+    Description: IPS subnet gateway address
+    Default: 10.0.0.1
+
+  IpsSubnetCidr:
+    Type: String
+    Description: IPS subnet
+    Default: 10.0.0.0/24
+
+  PublicSubnetCidr:
+    Type: String
+    Description: Public subnet
+    Default: 10.0.1.0/24
+  
+  UnprotectedSubnetCidr:
+    Type: String
+    Description: Unprotected subnet
+    Default: 10.0.2.0/24
+  
+  AdminCidr:
+    Description: >-
+      IP address(es) which are allowed to SSH in
+    Type: String
+    Default: 0.0.0.0/0
+  
+  Ec2KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: >-
+      Name of an existing EC2 KeyPair to enable SSH access to the instances
+  
+  SmsAmiId:
+    Type: AWS::EC2::Image::Id
+    Description: SMS AMI ID
+  
+  SmsInstanceType:
+    Description: SMS instance type
+    Type: String
+    Default: t2.large
+
+  Ec2AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: EC2 AMI ID
+  
+  PublicHostInstanceType:
+    Description: Public host instance type
+    Type: String
+    Default: t2.medium
+  
+  CnpAmiId:
+    Type: AWS::EC2::Image::Id
+    Description: CNP AMI ID
+  
+  CnpInstanceType:
+    Description: CNP instance type
+    Type: String
+    Default: c5.2xlarge
+
+  SmsManagementAddress:
+    Description: SMS management address
+    Type: String
+    Default: 10.0.2.9
+
+  CnpManagementAddress:
+    Description: CNP management address
+    Type: String
+    Default: 10.0.2.10
+
+  CnpIpsInterfaceAddress:
+    Description: CNP IPS interface address
+    Type: String
+    Default: 10.0.0.100
+
+  CnpPublicInterfaceAddress:
+    Description: CNP public interface address
+    Type: String
+    Default: 10.0.1.100
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} VPC CIDR
+
+  IpsSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref IpsSubnetCidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'      
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} IPS subnet
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref PublicSubnetCidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} Public subnet
+
+  UnprotectedSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref UnprotectedSubnetCidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'      
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} Unprotected subnet
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} IGW
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  IgwRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - Key: Name
+        Value: !Sub ${NameTagValue} IGW route table
+
+  # send "Public" traffic from the IGW to the IPS
+  IgwInspectionRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: !Sub ${PublicSubnetCidr}
+      NetworkInterfaceId: !Ref CnpInstance1aEni
+      RouteTableId: !Ref IgwRouteTable
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - Key: Name
+        Value: !Sub ${NameTagValue} Public route table
+
+  # route public traffic through the IPS
+  PublicInspectionRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NetworkInterfaceId: !Ref CnpInstance1bEni
+      RouteTableId: !Ref PublicRouteTable
+
+  IpsRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - Key: Name
+        Value: !Sub ${NameTagValue} IPS route table
+
+  # route traffic from the IPS to the IGW
+  IpsIgwRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref IpsRouteTable
+
+  IpsSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IpsRouteTable
+      SubnetId: !Ref IpsSubnet
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  UnprotectedRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - Key: Name
+        Value: !Sub ${NameTagValue} Unprotected route table
+
+  UnprotectedSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref UnprotectedRouteTable
+      SubnetId: !Ref UnprotectedSubnet
+
+  # route traffic from the unprotected subnet to the IGW
+  UnprotectedIgwRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref UnprotectedRouteTable
+
+  OpenSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "CnpDemoAllowAll"
+      GroupDescription: "Allows all traffic"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  SmsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref SmsAmiId
+      InstanceType: !Ref SmsInstanceType
+      KeyName: !Ref Ec2KeyName
+      SubnetId:  !Ref UnprotectedSubnet
+      PrivateIpAddress: !Ref SmsManagementAddress
+      SecurityGroupIds:
+        - !Ref OpenSecurityGroup      
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} SMS instance
+
+  CnpInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref CnpAmiId
+      InstanceType: !Ref CnpInstanceType
+      KeyName: !Ref Ec2KeyName
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs
+          Ref: 'AWS::Region'
+      IamInstanceProfile: !Ref CnpInstanceProfile
+      NetworkInterfaces:
+        - Description: CNP management IP
+          PrivateIpAddress: !Ref CnpManagementAddress
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet: 
+            - !Ref OpenSecurityGroup
+          SubnetId:  !Ref UnprotectedSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} CNP instance
+
+  CnpInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+      - Ref: CnpRole
+
+  CnpLogPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: CnpLogging
+      PolicyDocument:
+        Statement:
+        - Effect: Allow
+          Action:
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+          Resource: "arn:aws:logs:*:*:*"
+        - Effect: Allow
+          Action: "cloudwatch:PutMetricData"
+          Resource: "*"
+      Roles:
+      - Ref: CnpRole
+  
+  CnpRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+
+  CnpInstance1aEni:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId: !Ref IpsSubnet
+      PrivateIpAddress: !Ref CnpIpsInterfaceAddress
+      Description: CNP 1A interface
+      GroupSet: 
+      - !Ref OpenSecurityGroup
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} CNP 1A interface
+
+  CnpInstanceIgwInterfaceAttachment:
+    Type: AWS::EC2::NetworkInterfaceAttachment
+    Properties:
+        InstanceId: !Ref CnpInstance
+        NetworkInterfaceId: !Ref CnpInstance1aEni
+        DeviceIndex: 1
+
+  CnpInstance1bEni:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      PrivateIpAddress: !Ref CnpPublicInterfaceAddress
+      Description: CNP 1B interface
+      GroupSet: 
+      - !Ref OpenSecurityGroup
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} CNP 1B interface
+
+  CnpInstancePublicInterfaceAttachment:
+    Type: AWS::EC2::NetworkInterfaceAttachment
+    Properties:
+        InstanceId: !Ref CnpInstance
+        NetworkInterfaceId: !Ref CnpInstance1bEni
+        DeviceIndex: 2
+
+  PublicHostInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Ec2AmiId
+      InstanceType: !Ref PublicHostInstanceType
+      KeyName: !Ref Ec2KeyName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref OpenSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameTagValue} Public host instance
+
+Outputs:
+  SmsManagementAddress:
+    Description: SMS Management Address
+    Value: !GetAtt SmsInstance.PublicDnsName
+    Export:
+      Name: !Sub "${AWS::StackName}-SmsMangementAddress"
+  
+  CnpManagementAddress:
+    Description: CNP Management Address
+    Value: !GetAtt CnpInstance.PublicDnsName
+    Export:
+      Name: !Sub "${AWS::StackName}-CnpMangementAddress"
+
+  PublicHostAddress:
+    Description: Public Host Address
+    Value: !GetAtt PublicHostInstance.PublicDnsName
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicHostAddress"
+
+  IgwId:
+    Description: IGW ID
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub "${AWS::StackName}-IgwId"
+
+  IgwRouteTableId:
+    Description: IGW route table ID
+    Value: !Ref IgwRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-IgwRouteTableId"
